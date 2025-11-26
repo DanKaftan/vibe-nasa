@@ -1,6 +1,12 @@
-# LOFAR Spectrogram Playground
+# VIBE NASA - LOFAR Spectrogram Playground
 
-Interactive Streamlit app for exploring Low Frequency Analysis and Recording (LOFAR) spectrograms. The tool lets you load sample hydrophone captures (or your own WAV files), tweak STFT/TPSW processing parameters, and export the resulting LOFARgram for reporting or downstream analysis.
+<div align="center">
+  <img src="assets/Logo.png" alt="VIBE NASA Logo" width="200">
+</div>
+
+VIBE NASA is a Reaserch Tool designed for exploring LOFAR spectrograms for feature extraction exploration and Optimisation.
+
+The tool lets you load sample hydrophone captures (or your own WAV files), tweak STFT/TPSW processing parameters, and export the resulting LOFARgram for reporting or downstream analysis.
 
 ## Features
 
@@ -13,7 +19,7 @@ Interactive Streamlit app for exploring Low Frequency Analysis and Recording (LO
 ## Requirements
 
 - Python 3.10+ (tested on macOS 15 / Apple Silicon).
-- Recommended packages (see `pip install -r requirements.txt` if available):
+- Required packages (see `requirements.txt`):
   - streamlit
   - numpy
   - scipy
@@ -27,7 +33,7 @@ Interactive Streamlit app for exploring Low Frequency Analysis and Recording (LO
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
-pip install streamlit numpy scipy librosa soundfile matplotlib
+pip install -r requirements.txt
 streamlit run src/app.py
 ```
 

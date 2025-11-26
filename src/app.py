@@ -282,7 +282,7 @@ def main():
     st.set_page_config(page_title="LOFAR Playground", layout="wide")
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), width=200)
-    st.title("LOFAR Spectrogram Playground")
+    st.title("VIBE NASA - LOFAR Spectrogram Playground")
     st.caption("Interactively explore how LOFAR parameters affect the spectrogram.")
     init_session_state()
 
