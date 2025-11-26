@@ -28,8 +28,9 @@ tmp/
 # macOS metadata
 .DS_Store
 
-# Local media exports
+# Local media exports (but allow logo)
 *.png
+!assets/Logo.png
 
 # Sample datasets
 data/
