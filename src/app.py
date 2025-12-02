@@ -13,6 +13,7 @@ detect and analyze low-frequency signals with high sensitivity.
 import io
 import json
 from datetime import datetime
+from math import floor
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -24,6 +25,7 @@ import streamlit as st
 from matplotlib.colors import ListedColormap
 
 from transforms import lofar
+from demon import demongram
 
 # ============================================================================
 # Configuration Constants
@@ -205,6 +207,58 @@ def render_lofargram(waveform: np.ndarray, sample_rate: int, *, decimation_facto
     )
 
 
+def render_demongram(waveform: np.ndarray, sample_rate: int, *, method: str,
+                     cutoff: float, high: float, low: float,
+                     window_size: int, overlap: float):
+    """
+    Wrapper function to compute DEMONgram with user-selected parameters.
+    
+    This function acts as a bridge between the Streamlit UI and the core
+    DEMON processing function in demon.py. All parameters are passed
+    through to the demongram() function.
+    
+    Args:
+        waveform: Input audio signal
+        sample_rate: Original sample rate of the audio
+        method: DEMON method ('square_law' or 'hilbert_detector')
+        cutoff: DEMON cutoff frequency
+        high: DEMON high frequency
+        low: DEMON low frequency
+        window_size: Window size in samples
+        overlap: Overlap fraction (0-1)
+        
+    Returns:
+        Tuple of (time_axis, frequency_axis, demongram_matrix)
+    """
+    demongram_output = demongram(
+        waveform,
+        window_size=window_size,
+        overlap=overlap,
+        method=method,
+        cutoff=cutoff,
+        high=high,
+        low=low,
+        fs=sample_rate,
+    )
+    
+    # Calculate decimation rate to determine output sample rate
+    n = int(floor(sample_rate / (cutoff * 2)))
+    output_fs = sample_rate / n
+    
+    # Create time axis (center of each window)
+    num_windows = demongram_output.shape[0]
+    actual_window_size = window_size if window_size is not None else sample_rate
+    hop_size = int(actual_window_size * (1 - overlap))
+    time_axis = np.arange(num_windows) * (hop_size / sample_rate) + (actual_window_size / sample_rate / 2)
+    
+    # Create frequency axis (DEMON output represents envelope frequencies)
+    # The output is decimated, so we need to create a frequency axis up to cutoff
+    num_freq_bins = demongram_output.shape[1]
+    freq_axis = np.linspace(0, cutoff, num_freq_bins)
+    
+    return time_axis, freq_axis, demongram_output.T  # Transpose to match LOFAR format (freq x time)
+
+
 def init_session_state():
     """
     Initialize Streamlit session state with default values.
@@ -214,6 +268,8 @@ def init_session_state():
     don't already exist (using setdefault to avoid overwriting).
     """
     defaults = {
+        # Analysis method
+        "analysis_method": "LOFAR",
         # LOFAR processing parameters
         "window_select": DEFAULT_PRESET["window"],
         "nperseg_select": DEFAULT_PRESET["nperseg"],
@@ -222,6 +278,13 @@ def init_session_state():
         "floor_threshold": DEFAULT_PRESET["floor_threshold"],
         "floor_value": DEFAULT_PRESET["floor_value"],
         "eps_value": DEFAULT_PRESET["eps"],
+        # DEMON processing parameters
+        "demon_method": "square_law",
+        "demon_cutoff": 1000.0,
+        "demon_high": 10000.0,  # More reasonable default for typical audio
+        "demon_low": 5000.0,    # More reasonable default for typical audio
+        "demon_window_size": None,  # Will default to fs (1 second)
+        "demon_overlap": 0.5,
         # Display parameters
         "rotate_flag": DEFAULT_PRESET["rotate_90"],
         "cmap_choice": DEFAULT_PRESET["cmap"],
@@ -279,11 +342,11 @@ def apply_preset(preset: Dict):
 
 
 def main():
-    st.set_page_config(page_title="LOFAR Playground", layout="wide")
+    st.set_page_config(page_title="LOFAR/DEMON Playground", layout="wide")
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), width=200)
-    st.title("VIBE NASA - LOFAR Spectrogram Playground")
-    st.caption("Interactively explore how LOFAR parameters affect the spectrogram.")
+    st.title("VIBE NASA - LOFAR/DEMON Spectrogram Playground")
+    st.caption("Interactively explore how LOFAR and DEMON parameters affect the spectrogram.")
     init_session_state()
 
     sample_paths = list_sample_files(DEFAULT_AUDIO_ROOT)
@@ -312,35 +375,109 @@ def main():
             selected_label = uploaded_file.name
 
     # ------------------------------------------------------------------
-    # Parameter sidebar: everything below manipulates LOFAR computation.
+    # Parameter sidebar: everything below manipulates LOFAR/DEMON computation.
     # Streamlit keys map directly into session_state so presets can reload.
     # ------------------------------------------------------------------
-    st.sidebar.header("LOFAR parameters")
-    window_index = WINDOW_CHOICES.index(st.session_state["window_select"]) if st.session_state["window_select"] in WINDOW_CHOICES else 0
-    window = st.sidebar.selectbox("Window function", WINDOW_CHOICES, index=window_index, key="window_select")
-    nperseg = st.sidebar.select_slider("FFT window size (nperseg)", options=FFT_CHOICES,
-                                       value=st.session_state["nperseg_select"], key="nperseg_select")
-
-    max_noverlap = nperseg - 1
-    if st.session_state["noverlap_value"] > max_noverlap:
-        st.session_state["noverlap_value"] = max_noverlap
-    default_overlap = min(st.session_state["noverlap_value"], max_noverlap)
-    noverlap = st.sidebar.slider(
-        "Overlap (samples)",
-        min_value=0,
-        max_value=max_noverlap,
-        value=default_overlap,
-        key="noverlap_value",
+    st.sidebar.header("Analysis method")
+    analysis_method = st.sidebar.radio(
+        "Select analysis method",
+        ("LOFAR", "DEMON"),
+        index=0 if st.session_state.get("analysis_method", "LOFAR") == "LOFAR" else 1,
+        key="analysis_method"
     )
+    
+    if analysis_method == "LOFAR":
+        st.sidebar.header("LOFAR parameters")
+        window_index = WINDOW_CHOICES.index(st.session_state["window_select"]) if st.session_state["window_select"] in WINDOW_CHOICES else 0
+        window = st.sidebar.selectbox("Window function", WINDOW_CHOICES, index=window_index, key="window_select")
+        nperseg = st.sidebar.select_slider("FFT window size (nperseg)", options=FFT_CHOICES,
+                                           value=st.session_state["nperseg_select"], key="nperseg_select")
 
-    decimation_factor = st.sidebar.slider("Decimation factor", min_value=1, max_value=12,
-                                          value=st.session_state["decimation_factor"], step=1, key="decimation_factor")
-    floor_threshold = st.sidebar.slider("Floor threshold (log10 power)", min_value=-3.0, max_value=0.0,
-                                        value=st.session_state["floor_threshold"], step=0.1, key="floor_threshold")
-    floor_value = st.sidebar.slider("Floor replacement value", min_value=-3.0, max_value=3.0,
-                                    value=st.session_state["floor_value"], step=0.1, key="floor_value")
-    eps = st.sidebar.number_input("Stability epsilon", min_value=1e-15, max_value=1e-3,
-                                  value=st.session_state["eps_value"], format="%.1e", key="eps_value")
+        max_noverlap = nperseg - 1
+        if st.session_state["noverlap_value"] > max_noverlap:
+            st.session_state["noverlap_value"] = max_noverlap
+        default_overlap = min(st.session_state["noverlap_value"], max_noverlap)
+        noverlap = st.sidebar.slider(
+            "Overlap (samples)",
+            min_value=0,
+            max_value=max_noverlap,
+            value=default_overlap,
+            key="noverlap_value",
+        )
+
+        decimation_factor = st.sidebar.slider("Decimation factor", min_value=1, max_value=12,
+                                              value=st.session_state["decimation_factor"], step=1, key="decimation_factor")
+        floor_threshold = st.sidebar.slider("Floor threshold (log10 power)", min_value=-3.0, max_value=0.0,
+                                            value=st.session_state["floor_threshold"], step=0.1, key="floor_threshold")
+        floor_value = st.sidebar.slider("Floor replacement value", min_value=-3.0, max_value=3.0,
+                                        value=st.session_state["floor_value"], step=0.1, key="floor_value")
+        eps = st.sidebar.number_input("Stability epsilon", min_value=1e-15, max_value=1e-3,
+                                      value=st.session_state["eps_value"], format="%.1e", key="eps_value")
+    
+    else:  # DEMON
+        st.sidebar.header("DEMON parameters")
+        demon_method = st.sidebar.selectbox(
+            "DEMON method",
+            ("square_law", "hilbert_detector"),
+            index=0 if st.session_state.get("demon_method", "square_law") == "square_law" else 1,
+            key="demon_method"
+        )
+        
+        # Get sample rate for validation (use a reasonable default if not loaded yet)
+        if waveform is not None and sample_rate is not None:
+            max_freq = sample_rate / 2.1  # Nyquist with small safety margin
+            if max_freq < 1000:
+                max_freq = 1000.0
+        else:
+            max_freq = 100000.0  # Default high value when audio not loaded yet
+        
+        demon_cutoff = st.sidebar.number_input(
+            "Cutoff frequency (Hz)",
+            min_value=100.0,
+            max_value=min(10000.0, max_freq),
+            value=float(st.session_state.get("demon_cutoff", 1000.0)),
+            step=100.0,
+            key="demon_cutoff",
+            help=f"Must be less than Nyquist frequency ({max_freq*2:.0f} Hz / 2 = {max_freq:.0f} Hz)"
+        )
+        demon_low = st.sidebar.number_input(
+            "Low frequency (Hz)",
+            min_value=1000.0,
+            max_value=max_freq,
+            value=float(st.session_state.get("demon_low", min(20000.0, max_freq * 0.4))),
+            step=1000.0,
+            key="demon_low",
+            help=f"Must be less than Nyquist frequency ({max_freq:.0f} Hz)"
+        )
+        demon_high = st.sidebar.number_input(
+            "High frequency (Hz)",
+            min_value=1000.0,
+            max_value=max_freq,
+            value=float(st.session_state.get("demon_high", min(30000.0, max_freq * 0.6))),
+            step=1000.0,
+            key="demon_high",
+            help=f"Must be less than Nyquist frequency ({max_freq:.0f} Hz)"
+        )
+        demon_window_size_input = st.sidebar.number_input(
+            "Window size (samples, 0 for auto)",
+            min_value=0,
+            max_value=1000000,
+            value=int(st.session_state.get("demon_window_size", 0)) if st.session_state.get("demon_window_size") is not None else 0,
+            step=1000,
+            key="demon_window_size_input"
+        )
+        demon_window_size = None if demon_window_size_input == 0 else demon_window_size_input
+        demon_overlap = st.sidebar.slider(
+            "Overlap fraction",
+            min_value=0.0,
+            max_value=0.95,
+            value=float(st.session_state.get("demon_overlap", 0.5)),
+            step=0.05,
+            key="demon_overlap"
+        )
+    
+    # Display parameters (shared for both methods)
+    st.sidebar.header("Display parameters")
     rotate_90 = st.sidebar.checkbox("Rotate 90° (time on Y axis)", value=st.session_state["rotate_flag"], key="rotate_flag")
     cmap_choice = st.sidebar.selectbox(
         "Colormap",
@@ -355,18 +492,31 @@ def main():
     contrast_db = st.sidebar.slider("Color dynamic range (dB)", min_value=5.0, max_value=80.0,
                                     value=st.session_state["contrast_db"], step=1.0, key="contrast_db")
 
-    current_params = {
-        "window": window,
-        "nperseg": nperseg,
-        "noverlap": noverlap,
-        "decimation_factor": decimation_factor,
-        "floor_threshold": floor_threshold,
-        "floor_value": floor_value,
-        "eps": eps,
-        "rotate_90": rotate_90,
-        "cmap": cmap_choice,
-        "contrast_db": contrast_db,
-    }
+    if analysis_method == "LOFAR":
+        current_params = {
+            "window": window,
+            "nperseg": nperseg,
+            "noverlap": noverlap,
+            "decimation_factor": decimation_factor,
+            "floor_threshold": floor_threshold,
+            "floor_value": floor_value,
+            "eps": eps,
+            "rotate_90": rotate_90,
+            "cmap": cmap_choice,
+            "contrast_db": contrast_db,
+        }
+    else:  # DEMON
+        current_params = {
+            "method": demon_method,
+            "cutoff": demon_cutoff,
+            "high": demon_high,
+            "low": demon_low,
+            "window_size": demon_window_size,
+            "overlap": demon_overlap,
+            "rotate_90": rotate_90,
+            "cmap": cmap_choice,
+            "contrast_db": contrast_db,
+        }
 
     if waveform is None or sample_rate is None:
         st.info("Select or upload an audio file to begin.")
@@ -378,38 +528,72 @@ def main():
              f"**Duration:** {duration:.2f} s")
     st.audio(waveform_to_wav_bytes(waveform, sample_rate))
 
-    hop_length = nperseg - noverlap
-    st.markdown(
-        f"- **Window:** `{window}` | **nperseg:** {nperseg} samples\n"
-        f"- **Overlap:** {noverlap} samples | **Hop length:** {hop_length} samples\n"
-        f"- **Decimation factor:** {decimation_factor}"
-    )
-
-    with st.spinner("Computing LOFAR spectrogram..."):
-        t, f, lofar_matrix = render_lofargram(
-            waveform,
-            sample_rate,
-            decimation_factor=decimation_factor,
-            window=window,
-            nperseg=nperseg,
-            noverlap=noverlap,
-            floor_threshold=floor_threshold,
-            floor_value=floor_value,
-            eps=eps,
+    if analysis_method == "LOFAR":
+        hop_length = nperseg - noverlap
+        st.markdown(
+            f"- **Window:** `{window}` | **nperseg:** {nperseg} samples\n"
+            f"- **Overlap:** {noverlap} samples | **Hop length:** {hop_length} samples\n"
+            f"- **Decimation factor:** {decimation_factor}"
         )
 
-    if t.size == 0 or f.size == 0 or lofar_matrix.size == 0:
-        st.error("Parameters produced an empty LOFAR spectrogram. Try reducing the overlap or using a longer audio clip.")
+        with st.spinner("Computing LOFAR spectrogram..."):
+            t, f, spectrogram_matrix = render_lofargram(
+                waveform,
+                sample_rate,
+                decimation_factor=decimation_factor,
+                window=window,
+                nperseg=nperseg,
+                noverlap=noverlap,
+                floor_threshold=floor_threshold,
+                floor_value=floor_value,
+                eps=eps,
+            )
+        title = "LOFARgram"
+    else:  # DEMON
+        window_size_display = demon_window_size if demon_window_size is not None else sample_rate
+        hop_size = int(window_size_display * (1 - demon_overlap))
+        st.markdown(
+            f"- **Method:** `{demon_method}` | **Window size:** {window_size_display} samples\n"
+            f"- **Overlap:** {demon_overlap:.1%} | **Hop size:** {hop_size} samples\n"
+            f"- **Frequency range:** {demon_low:.0f} - {demon_high:.0f} Hz | **Cutoff:** {demon_cutoff:.0f} Hz"
+        )
+
+        with st.spinner("Computing DEMONgram..."):
+            try:
+                t, f, spectrogram_matrix = render_demongram(
+                    waveform,
+                    sample_rate,
+                    method=demon_method,
+                    cutoff=demon_cutoff,
+                    high=demon_high,
+                    low=demon_low,
+                    window_size=demon_window_size,
+                    overlap=demon_overlap,
+                )
+            except ValueError as e:
+                st.error(f"DEMON processing error: {str(e)}\n\n"
+                        f"**Tip:** Make sure your frequency settings are valid:\n"
+                        f"- High frequency must be < {sample_rate/2:.0f} Hz (Nyquist frequency)\n"
+                        f"- Low frequency must be < {sample_rate/2:.0f} Hz\n"
+                        f"- Low frequency must be < High frequency")
+                return
+            except Exception as e:
+                st.error(f"DEMON processing error: {str(e)}")
+                return
+        title = "DEMONgram"
+
+    if t.size == 0 or f.size == 0 or spectrogram_matrix.size == 0:
+        st.error(f"Parameters produced an empty {analysis_method} spectrogram. Try adjusting the parameters or using a longer audio clip.")
         return
 
-    st.subheader("LOFARgram")
+    st.subheader(title)
     fig, ax = plt.subplots(figsize=(12, 4))
     time_extent = (t[0], t[-1] if len(t) > 1 else t[0] + 1e-6)
     freq_extent = (f[0], f[-1] if len(f) > 1 else f[0] + 1e-6)
-    matrix_to_show = lofar_matrix.T if rotate_90 else lofar_matrix
+    matrix_to_show = spectrogram_matrix.T if rotate_90 else spectrogram_matrix
     x_extent = freq_extent if rotate_90 else time_extent
     y_extent = time_extent if rotate_90 else freq_extent
-    vmax = float(np.max(lofar_matrix))
+    vmax = float(np.max(spectrogram_matrix))
     vmin = vmax - float(contrast_db)
     im = ax.imshow(
         matrix_to_show,
@@ -422,8 +606,9 @@ def main():
     )
     ax.set_xlabel("Frequency (Hz)" if rotate_90 else "Time (s)")
     ax.set_ylabel("Time (s)" if rotate_90 else "Frequency (Hz)")
-    ax.set_title("LOFAR Spectrogram" + (" (rotated)" if rotate_90 else ""))
-    plt.colorbar(im, ax=ax, label="Relative power (log10)")
+    ax.set_title(f"{analysis_method} Spectrogram" + (" (rotated)" if rotate_90 else ""))
+    colorbar_label = "Relative power (log10)" if analysis_method == "LOFAR" else "Envelope amplitude"
+    plt.colorbar(im, ax=ax, label=colorbar_label)
     st.pyplot(fig)
     plt.close(fig)
 
@@ -446,7 +631,7 @@ def main():
     st.download_button(
         label="Download spectrogram (PNG)",
         data=img_buffer,
-        file_name=f"{Path(selected_label).stem}_lofar.png",
+        file_name=f"{Path(selected_label).stem}_{analysis_method.lower()}.png",
         mime="image/png",
     )
 
