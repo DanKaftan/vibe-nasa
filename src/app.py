@@ -75,15 +75,15 @@ CMAP_CHOICES = BASE_CMAP_CHOICES + list(CUSTOM_CMAPS.keys())
 # These values provide a good starting point for most audio analysis tasks
 DEFAULT_PRESET = {
     "window": WINDOW_CHOICES[0],      # Hann window (good balance)
-    "nperseg": 1024,                  # FFT window size (1024 samples)
-    "noverlap": 512,                  # 50% overlap between windows
-    "decimation_factor": 3,           # Downsample by factor of 3
-    "floor_threshold": -0.2,          # Clamp values below -0.2 log10 power
-    "floor_value": 0.0,               # Replace clamped values with 0.0
+    "nperseg": 2048,                  # FFT window size (1024 samples)
+    "noverlap": 1905,                  # 50% overlap between windows
+    "decimation_factor": 10,           # Downsample by factor of 3
+    "floor_threshold": -0.8,          # Clamp values below -0.2 log10 power
+    "floor_value": -0.7,               # Replace clamped values with 0.0
     "eps": 1e-12,                     # Small epsilon to prevent log(0)
-    "rotate_90": False,               # Standard orientation (time on X-axis)
-    "cmap": CMAP_CHOICES[0],          # Default colormap (viridis)
-    "contrast_db": 40.0,              # 40 dB dynamic range for display
+    "rotate_90": True,               # Standard orientation (time on X-axis)
+    "cmap": CMAP_CHOICES[8],          # Default colormap (viridis)
+    "gamma": 1.0,                     # Gamma correction factor (1.0 = no correction)
 }
 
 
@@ -291,7 +291,7 @@ def init_session_state():
         # Display parameters
         "rotate_flag": DEFAULT_PRESET["rotate_90"],
         "cmap_choice": DEFAULT_PRESET["cmap"],
-        "contrast_db": DEFAULT_PRESET["contrast_db"],
+        "gamma": DEFAULT_PRESET["gamma"],
         # Preset management
         "preset_name": "",
         "preset_history": [],
@@ -335,7 +335,7 @@ def apply_preset(preset: Dict):
     cmap_value = preset.get("cmap", DEFAULT_PRESET["cmap"])
     # Validate colormap choice
     st.session_state["cmap_choice"] = cmap_value if cmap_value in CMAP_CHOICES else DEFAULT_PRESET["cmap"]
-    st.session_state["contrast_db"] = float(preset.get("contrast_db", DEFAULT_PRESET["contrast_db"]))
+    st.session_state["gamma"] = float(preset.get("gamma", DEFAULT_PRESET["gamma"]))
     
     # Preserve preset name if provided
     st.session_state["preset_name"] = preset.get("name", st.session_state.get("preset_name", ""))
@@ -492,8 +492,9 @@ def main():
         cmap = CUSTOM_CMAPS[cmap_choice]
     else:
         cmap = plt.get_cmap(cmap_choice)
-    contrast_db = st.sidebar.slider("Color dynamic range (dB)", min_value=1.0, max_value=80.0,
-                                    value=st.session_state["contrast_db"], step=0.5, key="contrast_db")
+    gamma = st.sidebar.slider("Gamma correction", min_value=0.1, max_value=3.0,
+                              value=st.session_state["gamma"], step=0.1, key="gamma",
+                              help="Gamma correction factor. Values < 1.0 brighten the image, values > 1.0 darken it.")
 
     if analysis_method == "LOFAR":
         current_params = {
@@ -506,7 +507,7 @@ def main():
             "eps": eps,
             "rotate_90": rotate_90,
             "cmap": cmap_choice,
-            "contrast_db": contrast_db,
+            "gamma": gamma,
         }
     else:  # DEMON
         current_params = {
@@ -518,7 +519,7 @@ def main():
             "overlap": demon_overlap,
             "rotate_90": rotate_90,
             "cmap": cmap_choice,
-            "contrast_db": contrast_db,
+            "gamma": gamma,
         }
 
     if waveform is None or sample_rate is None:
@@ -596,16 +597,23 @@ def main():
     matrix_to_show = spectrogram_matrix.T if rotate_90 else spectrogram_matrix
     x_extent = freq_extent if rotate_90 else time_extent
     y_extent = time_extent if rotate_90 else freq_extent
+    
+    # Apply gamma correction
     vmax = float(np.max(spectrogram_matrix))
-    vmin = vmax - float(contrast_db)
+    vmin = float(np.min(spectrogram_matrix))
+    # Normalize to [0, 1] range
+    matrix_normalized = (matrix_to_show - vmin) / (vmax - vmin + 1e-10)
+    # Apply gamma correction: output = input^(1/gamma)
+    matrix_gamma_corrected = np.power(np.clip(matrix_normalized, 0, 1), 1.0 / gamma)
+    
     im = ax.imshow(
-        matrix_to_show,
+        matrix_gamma_corrected,
         origin="lower",
         aspect="auto",
         cmap=cmap,
         extent=[x_extent[0], x_extent[1], y_extent[0], y_extent[1]],
-        vmin=vmin,
-        vmax=vmax,
+        vmin=0.0,
+        vmax=1.0,
     )
     ax.set_xlabel("Frequency (Hz)" if rotate_90 else "Time (s)")
     ax.set_ylabel("Time (s)" if rotate_90 else "Frequency (Hz)")
@@ -618,13 +626,13 @@ def main():
     img_buffer = io.BytesIO()
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.imshow(
-        matrix_to_show,
+        matrix_gamma_corrected,
         origin="lower",
         aspect="auto",
         cmap=cmap,
         extent=[x_extent[0], x_extent[1], y_extent[0], y_extent[1]],
-        vmin=vmin,
-        vmax=vmax,
+        vmin=0.0,
+        vmax=1.0,
     )
     ax.set_axis_off()
     plt.savefig(img_buffer, format="png", bbox_inches="tight", pad_inches=0)
