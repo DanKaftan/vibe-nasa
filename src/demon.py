@@ -1,5 +1,6 @@
 from scipy.signal import butter, lfilter, decimate, hilbert
-from numpy import square, sqrt, mean, abs, array, zeros
+from numpy import square, sqrt, mean, abs, array, zeros, maximum
+from numpy.fft import fft
 from math import floor
 
 
@@ -25,12 +26,14 @@ IEEE.
 
 def square_law(x, cutoff=1000.0, high=30000, low=20000, fs=200000):
     """
-    :param x: numpy.ndarray
-    :param cutoff: float
-    :param high: float
-    :param low: float
-    :param fs: float
-    :return: numpy.ndarray
+    Square law DEMON algorithm that returns frequency-domain spectrum.
+    
+    :param x: numpy.ndarray - Input signal
+    :param cutoff: float - DEMON cutoff frequency (Hz)
+    :param high: float - High frequency for bandpass filter (Hz)
+    :param low: float - Low frequency for bandpass filter (Hz)
+    :param fs: float - Sampling frequency (Hz)
+    :return: numpy.ndarray - Frequency-domain DEMON spectrum (magnitude)
     """
 
     # Bandpass filter parameters
@@ -68,13 +71,24 @@ def square_law(x, cutoff=1000.0, high=30000, low=20000, fs=200000):
     # decimate signal by n using a low pass filter
     x = decimate(x, n, ftype='fir')
 
-    # square root of signal
-    x = sqrt(x)
+    # square root of signal (clip to non-negative to avoid numerical precision issues)
+    x = sqrt(maximum(x, 0))
 
     # subtract mean
     x = x - mean(x)
 
-    return x
+    # Compute FFT to get frequency-domain DEMON spectrum
+    x_fft = fft(x)
+    
+    # Return magnitude spectrum (one-sided, positive frequencies only)
+    # Take first half + DC component for one-sided spectrum
+    n = len(x_fft)
+    x_spectrum = abs(x_fft[:n//2 + 1])
+    
+    # Double all frequencies except DC and Nyquist (for one-sided spectrum)
+    x_spectrum[1:-1] *= 2
+
+    return x_spectrum
 
 
 def hilbert_detector(x, cutoff=1000.0, high=30000, low=20000, fs=200000):
@@ -182,8 +196,9 @@ def demongram(x, window_size=None, hop_size=None, overlap=None,
     output_length = len(first_output)
     
     # Initialize output array
-    demongram_output = zeros((num_windows, output_length))
-    demongram_output[0] = first_output
+    #demongram_output = zeros((num_windows, output_length))
+    demongram_output = zeros((output_length, num_windows))
+    demongram_output[:, 0] = first_output
     
     # Process remaining windows
     for i in range(1, num_windows):
@@ -197,7 +212,7 @@ def demongram(x, window_size=None, hop_size=None, overlap=None,
         else:
             window = x[start_idx:end_idx]
         
-        demongram_output[i] = demon_func(window, cutoff=cutoff, high=high, 
+        demongram_output[:, i] = demon_func(window, cutoff=cutoff, high=high, 
                                          low=low, fs=fs)
     
     return demongram_output

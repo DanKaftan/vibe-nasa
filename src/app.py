@@ -24,7 +24,7 @@ import soundfile as sf
 import streamlit as st
 from matplotlib.colors import ListedColormap
 
-from transforms import lofar
+from lofar import lofar
 from demon import demongram
 
 # ============================================================================
@@ -59,12 +59,12 @@ CUSTOM_CMAPS = {
     "sonar_green": ListedColormap(
         [
             (0.0, 0.0, 0.0),      # Black (lowest values)
-            (0.0, 0.05, 0.01),    # Very dark green
-            (0.0, 0.15, 0.03),    # Dark green
-            (0.0, 0.3, 0.07),     # Medium-dark green
-            (0.0, 0.5, 0.13),     # Medium green
-            (0.1, 0.75, 0.2),     # Bright green
-            (0.3, 0.95, 0.35),    # Very bright green (highest values)
+            (0.0, 0.03, 0.005),   # Very dark green
+            (0.0, 0.08, 0.015),   # Dark green
+            (0.0, 0.15, 0.03),    # Medium-dark green
+            (0.0, 0.25, 0.05),    # Medium green
+            (0.0, 0.4, 0.08),     # Medium-bright green
+            (0.0, 0.55, 0.12),    # Bright green (highest values)
         ],
         name="sonar_green",
     )
@@ -245,18 +245,21 @@ def render_demongram(waveform: np.ndarray, sample_rate: int, *, method: str,
     n = int(floor(sample_rate / (cutoff * 2)))
     output_fs = sample_rate / n
     
+    # demongram_output shape is (num_freq_bins, num_windows) - freq bins as rows, time windows as columns
+    num_freq_bins, num_windows = demongram_output.shape
+    
     # Create time axis (center of each window)
-    num_windows = demongram_output.shape[0]
     actual_window_size = window_size if window_size is not None else sample_rate
     hop_size = int(actual_window_size * (1 - overlap))
     time_axis = np.arange(num_windows) * (hop_size / sample_rate) + (actual_window_size / sample_rate / 2)
     
-    # Create frequency axis (DEMON output represents envelope frequencies)
-    # The output is decimated, so we need to create a frequency axis up to cutoff
-    num_freq_bins = demongram_output.shape[1]
+    # Create frequency axis for FFT output (one-sided spectrum)
+    # Frequency bins go from 0 to Nyquist (cutoff) of decimated signal
     freq_axis = np.linspace(0, cutoff, num_freq_bins)
     
-    return time_axis, freq_axis, demongram_output.T  # Transpose to match LOFAR format (freq x time)
+    # Transpose to match LOFAR format (freq x time) - (num_freq_bins, num_windows) -> (num_freq_bins, num_windows)
+    # Actually, demongram already has (freq, time) format, so no transpose needed
+    return time_axis, freq_axis, demongram_output  # Already in (freq x time) format
 
 
 def init_session_state():
@@ -489,8 +492,8 @@ def main():
         cmap = CUSTOM_CMAPS[cmap_choice]
     else:
         cmap = plt.get_cmap(cmap_choice)
-    contrast_db = st.sidebar.slider("Color dynamic range (dB)", min_value=5.0, max_value=80.0,
-                                    value=st.session_state["contrast_db"], step=1.0, key="contrast_db")
+    contrast_db = st.sidebar.slider("Color dynamic range (dB)", min_value=1.0, max_value=80.0,
+                                    value=st.session_state["contrast_db"], step=0.5, key="contrast_db")
 
     if analysis_method == "LOFAR":
         current_params = {
