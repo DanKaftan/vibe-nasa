@@ -1,0 +1,47 @@
+// For format details, see https://aka.ms/devcontainer.json.
+{
+	"name": "nasa",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "ubuntu:24.04",
+
+	"containerEnv": { "DISPLAY": "${localEnv:DISPLAY}"},
+	"privileged": true,
+	
+	"runArgs": [
+    	"--gpus", "all",
+		// "--shm-size=4gb",
+		"--network=host"
+	],
+
+
+	"mounts": [
+		{ "source": "${localEnv:HOME}/Projects/audio/data", "target": "/workspaces/vibe-nasa/data", "type": "bind" }
+	],
+
+	"updateContentCommand": "./.devcontainer/updateContentCmd.sh",
+
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	// "features": {},
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": "./.devcontainer/postCreateCmd.sh",
+
+	"postStartCommand": "git config --global --add safe.directory ${containerWorkspaceFolder}",
+
+	// Configure tool-specific properties.
+	"customizations": {
+		"vscode": {
+      		"extensions": [
+				"ms-python.python",
+				"ms-python.debugpy",
+        		"ms-python.vscode-pylance"
+			]
+    	}
+	}
+
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+}
